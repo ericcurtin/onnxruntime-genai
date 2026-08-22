@@ -1797,6 +1797,49 @@ TEST_F(EngineStepTest, PrefillingRequestDoesNotVerifyDrafts) {
   EXPECT_EQ(request->PendingDraftTokenCount(), 0u);
 }
 
+// A drafted stop token must not short-circuit the search's end-of-sequence handling: the tokens
+// the application sees have to be the same ones a plain decode would have produced.
+TEST_F(EngineStepTest, SpeculativeStepEndsTheTurnOnADraftedStopToken) {
+  const int32_t eos = EosToken(*model_);
+  const int32_t filler = eos == 5 ? 6 : 5;
+
+  const auto drain = [](const std::shared_ptr<Request>& request) {
+    std::vector<int32_t> tokens;
+    while (request->HasUnseenTokens()) tokens.push_back(request->UnseenToken());
+    return tokens;
+  };
+
+  // Reference: the model predicts 11 and then the stop token, one token per step.
+  auto plain_engine = MakeDoublesEngine(model_, /*capacity=*/8, filler);
+  auto plain = MintRequest(*model_, Prompt(10));
+  plain_engine.engine->AddRequest(plain);
+  ASSERT_EQ(plain_engine.engine->Step(), plain);
+  drain(plain);
+  plain_engine.executor->SetVerifyRowTokens({11});
+  ASSERT_EQ(plain_engine.engine->Step(), plain);
+  auto expected = drain(plain);
+  plain_engine.executor->SetVerifyRowTokens({eos});
+  ASSERT_EQ(plain_engine.engine->Step(), plain);
+  for (int32_t token : drain(plain)) expected.push_back(token);
+  ASSERT_TRUE(plain->IsTurnComplete());
+
+  auto engine = MakeDoublesEngine(model_, /*capacity=*/8, filler);
+  engine.cache->SetMaxDraftTokensPerStep(3);
+  auto request = MintRequest(*model_, Prompt(10));
+  engine.engine->AddRequest(request);
+  ASSERT_EQ(engine.engine->Step(), request);
+  drain(request);
+
+  request->SetDraftTokens(std::vector<int32_t>{11, eos, 13});
+  engine.executor->SetVerifyRowTokens({11, eos, eos, eos});
+  ASSERT_EQ(engine.engine->Step(), request);
+
+  EXPECT_EQ(drain(request), expected);
+  EXPECT_TRUE(request->IsTurnComplete());
+  // Only the first draft was accepted; the stop token came from the sampler on the next row.
+  ASSERT_EQ(engine.cache->prefix_commits.size(), 1u);
+  EXPECT_EQ(engine.cache->prefix_commits[0].kept_tokens, 2u);
+}
 }  // namespace
 }  // namespace test
 }  // namespace Generators

@@ -169,6 +169,7 @@ struct Request : std::enable_shared_from_this<Request>,
 
   void AppendDraftsForTransaction(size_t draft_count);
   std::span<const int32_t> StagedDraftTokens() const;
+  bool IsStopToken(int32_t token) const;
   void RewindDraftsForTransaction(size_t accepted_count);
 
   void ValidateEngineCompatibility() const;
@@ -176,8 +177,7 @@ struct Request : std::enable_shared_from_this<Request>,
   void SaveStateForExternalSamplingTransaction();
   RequestStepResult ApplyLogitsForTransaction(DeviceSpan<float> logits);
   void PrepareGenerationForTransaction(DeviceSpan<float> logits);
-  RequestStepResult StageGenerationForTransaction(
-      const RequestStepPlan& plan);
+  RequestStepResult StageGenerationForTransaction();
   void RestoreStateForTransaction();
   void QueueStateRestoreForTransaction();
   void CompleteStateRestoreForTransaction();
@@ -381,8 +381,11 @@ struct Request : std::enable_shared_from_this<Request>,
 
   void ApplyLogitsProcessors(DeviceSpan<float> logits);
   void SelectNextToken();
-  RequestStepResult StageGeneration(int64_t sequence_length_before);
+  RequestStepResult StageGeneration();
   void CommitGuidanceToken(const RequestStepResult& result);
+  // Sequence length recorded by PrepareGenerationForTransaction, so both the per-request and the
+  // batched sampler path decide "did the sampler append a token" against the same boundary.
+  int64_t sequence_length_before_sampling_{};
 
   void* opaque_data_{nullptr};  // Opaque data for user-defined purposes, can be set and retrieved by the application
 };
