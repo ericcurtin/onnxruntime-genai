@@ -2104,6 +2104,46 @@ TEST_F(EngineStepTest, SpeculativeStepEndsTheTurnOnADraftedStopToken) {
   ASSERT_EQ(engine.cache->prefix_commits.size(), 1u);
   EXPECT_EQ(engine.cache->prefix_commits[0].kept_tokens, 2u);
 }
+
+TEST_F(EngineStepTest, CompositeDefersDraftsWhilePrefillSharesTheStep) {
+  model_ = LoadSyntheticCompositeModel();
+  auto engine = MakeCompositeDoublesEngine(model_, /*forced_token=*/5);
+  auto decode = MintRequest(*model_, Prompt(10));
+  engine.engine->AddRequest(decode);
+  engine.executor->SetExecutionCallback([](ExecutionContext& context) {
+    for (const auto& binding : context.fixed_state_bindings) {
+      FillFixedOutputRow(binding, 0, 10.0f);
+    }
+  });
+  ASSERT_EQ(engine.engine->Step(), decode);
+  while (decode->HasUnseenTokens()) decode->UnseenToken();
+
+  decode->SetDraftTokens(std::array<int32_t, 3>{11, 12, 13});
+  auto prefill = MintRequest(*model_, Prompt(20));
+  engine.engine->AddRequest(prefill);
+  engine.executor->SetExecutionCallback([&](ExecutionContext& context) {
+    ASSERT_EQ(context.plan->requests.size(), 2u);
+    EXPECT_EQ(context.plan->requests[0].request, decode);
+    EXPECT_EQ(context.plan->requests[0].draft_token_count, 0u);
+    EXPECT_EQ(context.plan->requests[0].unprocessed_token_count, 1u);
+    EXPECT_EQ(context.plan->requests[1].request, prefill);
+    EXPECT_TRUE(context.plan->requests[1].is_prefill);
+    EXPECT_EQ(
+      context.plan->token_count,
+      context.plan->requests[0].unprocessed_token_count +
+        context.plan->requests[1].unprocessed_token_count);
+    for (size_t row = 0; row < context.fixed_state_slots.size(); ++row) {
+      for (const auto& binding : context.fixed_state_bindings) {
+        FillFixedOutputRow(binding, row, 20.0f + static_cast<float>(row));
+      }
+    }
+  });
+
+  ASSERT_EQ(engine.engine->Step(), decode);
+  EXPECT_EQ(decode->PendingDraftTokenCount(), 0u);
+  EXPECT_TRUE(decode->HasUnseenTokens());
+  EXPECT_TRUE(prefill->HasUnseenTokens());
+}
 }  // namespace
 }  // namespace test
 }  // namespace Generators
