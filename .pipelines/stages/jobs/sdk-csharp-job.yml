@@ -49,6 +49,8 @@ jobs:
   pool:
     name: 'onnxruntime-Win-CPU-2022'
     os: windows
+    demands:
+    - ImageOverride -equals onnxruntime-win2025-nvme-x64
   timeoutInMinutes: 120
   workspace:
     clean: all
