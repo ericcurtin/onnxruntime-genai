@@ -1738,9 +1738,18 @@ TEST_F(EngineStepTest, MtpCoordinatorRecordsFullPartialAndZeroAcceptance) {
   }
 
   engine.executor->SetVerifyRowTokens({
-      draft_token, draft_token, draft_token, 14,
-      draft_token, 12, 13, 14,
-      12, 13, 14, 15,
+      draft_token,
+      draft_token,
+      draft_token,
+      14,
+      draft_token,
+      12,
+      13,
+      14,
+      12,
+      13,
+      14,
+      15,
   });
   AdvanceUntilTargetDecodeCount(engine, 2);
 
@@ -1771,6 +1780,7 @@ TEST_F(EngineStepTest, MtpHeadFailureRollsBackTargetAndAuxiliaryTransactions) {
   ASSERT_EQ(request->PendingDraftTokenCount(), 3u);
   const int target_releases_before = engine.cache->reservation_release_calls;
   const int releases_before = engine.mtp_cache->reservation_release_calls;
+  const size_t synchronizes_before = engine.device_state->synchronize_calls;
 
   engine.executor->SetVerifyRowTokens({draft_token, draft_token, draft_token, 14});
   engine.mtp_executor->SetNextFailure(ScriptedExecutionFailure::RetryableDuringExecution);
@@ -1782,6 +1792,7 @@ TEST_F(EngineStepTest, MtpHeadFailureRollsBackTargetAndAuxiliaryTransactions) {
   EXPECT_EQ(request->PendingDraftTokenCount(), 3u);
   EXPECT_EQ(engine.cache->reservation_release_calls, target_releases_before + 1);
   EXPECT_EQ(engine.mtp_cache->reservation_release_calls, releases_before + 1);
+  EXPECT_EQ(engine.device_state->synchronize_calls, synchronizes_before + 1);
   EXPECT_EQ(engine.mtp_cache->AllocatedCount(), 1u);
   EXPECT_EQ(engine.engine->GetSpeculativeStats().rounds, 0u);
 
@@ -1790,6 +1801,29 @@ TEST_F(EngineStepTest, MtpHeadFailureRollsBackTargetAndAuxiliaryTransactions) {
   EXPECT_EQ(stats.rounds, 1u);
   EXPECT_EQ(stats.full_accept_rounds, 1u);
   EXPECT_EQ(stats.draft_tokens_accepted, 3u);
+}
+
+TEST_F(EngineStepTest, MtpCoordinatorSkipsPureNucleusSampling) {
+  auto engine = MakeMtpDoublesEngine(
+      model_, /*capacity=*/8, /*target_token=*/5, /*draft_token=*/11);
+  auto params = MakeGreedyParams(*model_);
+  params->search.do_sample = true;
+  params->search.top_k = 0;
+  params->search.top_p = 0.95f;
+  params->search.temperature = 1.0f;
+  params->speculative.max_draft_tokens = 3;
+  auto request = std::make_shared<Request>(params);
+  request->AddTokens(Prompt(10));
+  engine.engine->AddRequest(request);
+
+  ASSERT_EQ(engine.engine->Step(), request);
+  EXPECT_EQ(request->PendingDraftTokenCount(), 0u);
+  EXPECT_EQ(engine.mtp_executor->decode_calls, 0);
+  static_cast<void>(DrainTokens(request));
+
+  ASSERT_EQ(engine.engine->Step(), request);
+  EXPECT_EQ(request->PendingDraftTokenCount(), 0u);
+  EXPECT_EQ(engine.mtp_executor->decode_calls, 0);
 }
 
 TEST_F(EngineStepTest, MtpCoordinatorClampsDraftsAtMaxLength) {
@@ -2162,6 +2196,7 @@ TEST_F(EngineStepTest, SpeculativeStepEndsTheTurnOnADraftedStopToken) {
 
 TEST_F(EngineStepTest, CompositeDefersDraftsWhilePrefillSharesTheStep) {
   model_ = LoadSyntheticCompositeModel();
+  model_->config_->engine.dynamic_batching->num_blocks = 2;
   auto engine = MakeCompositeDoublesEngine(model_, /*forced_token=*/5);
   auto decode = MintRequest(*model_, Prompt(10));
   engine.engine->AddRequest(decode);
@@ -2184,9 +2219,9 @@ TEST_F(EngineStepTest, CompositeDefersDraftsWhilePrefillSharesTheStep) {
     EXPECT_EQ(context.plan->requests[1].request, prefill);
     EXPECT_TRUE(context.plan->requests[1].is_prefill);
     EXPECT_EQ(
-      context.plan->token_count,
-      context.plan->requests[0].unprocessed_token_count +
-        context.plan->requests[1].unprocessed_token_count);
+        context.plan->token_count,
+        context.plan->requests[0].unprocessed_token_count +
+            context.plan->requests[1].unprocessed_token_count);
     for (size_t row = 0; row < context.fixed_state_slots.size(); ++row) {
       for (const auto& binding : context.fixed_state_bindings) {
         FillFixedOutputRow(binding, row, 20.0f + static_cast<float>(row));
