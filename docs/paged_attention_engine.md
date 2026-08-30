@@ -866,12 +866,12 @@ configuration. DFlash 2 uses `block_size - 1` draft rows because its first row i
 predicts from all `block_size` rows.
 
 The target decoder output is the packed auxiliary hidden-state tensor named by
-`main_aux_hidden_states`; that variable-size output does not have persistent graph buffers. Engine
-construction validates its rank, element type, and static width against the drafter input. It also
-validates the drafter's lattice outputs and every paged-cache input/output, including the page size,
-before allocating cache resources. The drafter run is synchronous because its packed inputs and
-outputs are owned by one proposal call, so its run options cannot disable execution-provider
-synchronization.
+`model.dflash2.main_aux_hidden_states` or `model.dspark.main_aux_hidden_states`; that variable-size
+output does not have persistent graph buffers. Engine construction validates its rank, element type,
+and static width against the drafter input. It also validates the drafter's lattice outputs and every
+paged-cache input/output, including the page size, before allocating cache resources. The drafter run
+is synchronous because its packed inputs and outputs are owned by one proposal call, so its run
+options cannot disable execution-provider synchronization.
 
 A windowed block drafter owns a fixed ring of cache blocks per maximum batch row. A full-attention
 block drafter instead mirrors the target pool: its bytes per target block and fixed query-spill bytes
