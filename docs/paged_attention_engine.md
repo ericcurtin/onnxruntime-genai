@@ -860,12 +860,24 @@ Graph buffers are allocated once at configured limits and reshaped as static vie
 
 Prefill and mixed-token steps use graph id `-1`, which tells the CUDA execution provider to run eagerly.
 
-An Engine-hosted DFlash 2 drafter also forces eager target execution. Its target decoder output is
-the packed auxiliary hidden-state tensor named by `model.dflash2.main_aux_hidden_states`; that
-variable-size output does not have persistent graph buffers. Engine construction validates its
-rank, element type, and static width against the drafter input before allocating cache resources.
-The drafter run is synchronous because its packed inputs and outputs are owned by one proposal
-call, so `model.dflash2.run_options` cannot disable execution-provider synchronization.
+An Engine-hosted DFlash 2 or DSpark block drafter also forces eager target execution. `model.dspark`
+is a configuration alias for the shared DFlash 2 runtime, and both sections cannot appear in one
+configuration. DFlash 2 uses `block_size - 1` draft rows because its first row is an anchor; DSpark
+predicts from all `block_size` rows.
+
+The target decoder output is the packed auxiliary hidden-state tensor named by
+`main_aux_hidden_states`; that variable-size output does not have persistent graph buffers. Engine
+construction validates its rank, element type, and static width against the drafter input. It also
+validates the drafter's lattice outputs and every paged-cache input/output, including the page size,
+before allocating cache resources. The drafter run is synchronous because its packed inputs and
+outputs are owned by one proposal call, so its run options cannot disable execution-provider
+synchronization.
+
+A windowed block drafter owns a fixed ring of cache blocks per maximum batch row. A full-attention
+block drafter instead mirrors the target pool: its bytes per target block and fixed query-spill bytes
+are charged before target capacity is selected, using the cache element type reported by the graph.
+Its physical pool includes enough checked spill capacity for every active query block, including
+query blocks that span multiple cache pages.
 
 ## Backpressure and fairness
 
